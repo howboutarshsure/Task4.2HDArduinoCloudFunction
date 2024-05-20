@@ -1,46 +1,135 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LED Control Panel</title>
-    <script src="https://www.gstatic.com/firebasejs/8.2.0/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/8.2.0/firebase-database.js"></script>
-    <script>
-        // Your web app's Firebase configuration
-        var firebaseConfig = {
-            apiKey: "AIzaSyBssFMYXmXhzA2OzYhRJiyu5zptvut_SN0",
-            authDomain: "trafficlight-3c97f.firebaseapp.com",
-            databaseURL: "https://trafficlight-3c97f-default-rtdb.asia-southeast1.firebasedatabase.app",
-            projectId: "trafficlight-3c97f",
-            storageBucket: "trafficlight-3c97f.appspot.com",
-            messagingSenderId: "1041823636260",
-            appId: "1:1041823636260:web:7a668be03b87563f07b1b1",
-            measurementId: "G-LW5HQS3DC4"
-        };
-        // Initialize Firebase
-        firebase.initializeApp(firebaseConfig);
-        
-        // Function to send commands to Firebase to control LED states
-        function sendCommand(color) {
-            const ledsRef = firebase.database().ref('leds');
-            ledsRef.once('value').then(function(snapshot) {
-                const leds = snapshot.val(); // Current state of all LEDs
-                let updates = {
-                    red: false,
-                    green: false,
-                    blue: false
-                };
-                updates[color] = !leds[color]; // Toggle the selected LED
-                ledsRef.update(updates); // Update all LED states
-            });
-        }
-    </script>
-</head>
-<body>
-    <h1>Remote LED Control Panel</h1>
-    <button onclick="sendCommand('red')">Toggle Red LED</button>
-    <button onclick="sendCommand('green')">Toggle Green LED</button>
-    <button onclick="sendCommand('blue')">Toggle Blue LED</button>
-</body>
-</html>
+#include <SPI.h>
+#include <WiFiNINA.h>
+#include <ArduinoHttpClient.h>
+#include <ArduinoJson.h>
+
+// Replace with your WiFi credentials
+#define WIFI_SSID "MINEZ_2G"
+#define WIFI_PASSWORD "69699696"
+
+const char* firebaseHost = "trafficlight-3c97f-default-rtdb.asia-southeast1.firebasedatabase.app";
+const int LED_BLUE = 4;  // Blue LED pin
+const int LED_GREEN = 5; // Green LED pin
+const int LED_RED = 6;   // Red LED pin
+
+WiFiSSLClient wifiClient;
+HttpClient httpClient(wifiClient, firebaseHost, 443);
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(LED_BLUE, OUTPUT);
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_RED, OUTPUT);
+
+  setupWiFi();
+}
+
+void loop() {
+  if (fetchAndSetLEDStates()) {
+    Serial.println("LED states updated successfully.");
+  } else {
+    Serial.println("Failed to update LED states.");
+  }
+  
+  if (Serial.available() > 0) {
+    String input = Serial.readStringUntil('\n');
+    input.trim();
+    processSerialInput(input);
+  }
+  
+  delay(500);  // Check every 500ms
+}
+
+void setupWiFi() {
+  Serial.print("Connecting to WiFi...");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println(" connected.");
+}
+
+bool fetchAndSetLEDStates() {
+  httpClient.get("/leds.json");
+
+  int statusCode = httpClient.responseStatusCode();
+  Serial.print("Status code: ");
+  Serial.println(statusCode);
+
+  if (statusCode != 200) {
+    Serial.print("Failed to fetch data: ");
+    Serial.println(statusCode);
+    return false;
+  }
+
+  String response = httpClient.responseBody();
+  Serial.print("Received: ");
+  Serial.println(response);
+
+  DynamicJsonDocument doc(256);
+  DeserializationError error = deserializeJson(doc, response);
+  if (error) {
+    Serial.print("JSON deserialize failed: ");
+    Serial.println(error.c_str());
+    return false;
+  }
+
+  digitalWrite(LED_BLUE, doc["blue"] ? HIGH : LOW);  // Turn blue LED on if true, off if false
+  digitalWrite(LED_GREEN, doc["green"] ? HIGH : LOW); // Turn green LED on if true, off if false
+  digitalWrite(LED_RED, doc["red"] ? HIGH : LOW);     // Turn red LED on if true, off if false
+
+  return true;
+}
+
+void processSerialInput(const String& input) {
+  DynamicJsonDocument doc(256);
+  bool update = false;
+
+  if (input == "blue") {
+    digitalWrite(LED_BLUE, HIGH);
+    digitalWrite(LED_GREEN, LOW);
+    digitalWrite(LED_RED, LOW);
+    doc["blue"] = true;
+    doc["green"] = false;
+    doc["red"] = false;
+    update = true;
+  } else if (input == "green") {
+    digitalWrite(LED_BLUE, LOW);
+    digitalWrite(LED_GREEN, HIGH);
+    digitalWrite(LED_RED, LOW);
+    doc["blue"] = false;
+    doc["green"] = true;
+    doc["red"] = false;
+    update = true;
+  } else if (input == "red") {
+    digitalWrite(LED_BLUE, LOW);
+    digitalWrite(LED_GREEN, LOW);
+    digitalWrite(LED_RED, HIGH);
+    doc["blue"] = false;
+    doc["green"] = false;
+    doc["red"] = true;
+    update = true;
+  } else {
+    Serial.println("Invalid input. Please enter 'red', 'green', or 'blue'.");
+  }
+
+  if (update) {
+    updateFirebase(doc);
+  }
+}
+
+void updateFirebase(const DynamicJsonDocument& doc) {
+  String jsonString;
+  serializeJson(doc, jsonString);
+  httpClient.put("/leds.json", "application/json", jsonString);
+
+  int statusCode = httpClient.responseStatusCode();
+  String response = httpClient.responseBody();
+
+  Serial.print("Update status code: ");
+  Serial.println(statusCode);
+  Serial.print("Response: ");
+  Serial.println(response);
+}
